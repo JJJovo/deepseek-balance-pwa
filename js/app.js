@@ -1,5 +1,6 @@
 /* ========================================
-   DeepSeek Balance PWA - 核心逻辑
+   DeepSeek Balance PWA - 核心逻辑 (v2)
+   修复移动端触摸兼容性问题
    ======================================== */
 
 (function () {
@@ -10,409 +11,466 @@
   const STORAGE_KEY = 'ds_api_key';
 
   // --- DOM 引用 ---
-  const $ = (sel) => document.querySelector(sel);
-  const $$ = (sel) => document.querySelectorAll(sel);
+  const $ = function (sel) { return document.querySelector(sel); };
+
+  // --- 日志（便于移动端调试） ---
+  function log() {
+    try { console.log('[DS Balance]', ...arguments); } catch(e) {}
+  }
 
   // --- 状态 ---
-  const state = {
+  var state = {
     apiKey: '',
     balanceData: null,
     lastUpdated: null,
     isLoading: false,
-    currentView: 'loading', // 'loading' | 'setup' | 'dashboard'
+    currentView: 'loading'
   };
 
-  // --- DOM 元素 ---
-  const views = {
-    loading: $('#view-loading'),
-    setup: $('#view-setup'),
-    dashboard: $('#view-dashboard'),
-  };
+  // --- DOM 元素（延迟获取，确保 DOM 已就绪） ---
+  var els = {};
 
-  // Setup 页元素
-  const apiKeyInput = $('#api-key-input');
-  const togglePasswordBtn = $('#toggle-password');
-  const saveKeyBtn = $('#save-key-btn');
-  const setupError = $('#setup-error');
-
-  // Dashboard 页元素
-  const pullIndicator = $('#pull-indicator');
-  const totalBalanceEl = $('#total-balance');
-  const statusBadge = $('#status-badge');
-  const toppedUpBalanceEl = $('#topped-up-balance');
-  const grantedBalanceEl = $('#granted-balance');
-  const lastUpdatedEl = $('#last-updated');
-  const refreshBtn = $('#refresh-btn');
-  const settingsBtn = $('#settings-btn');
-  const dashboardError = $('#dashboard-error');
+  function cacheDom() {
+    els.views = {
+      loading: $('#view-loading'),
+      setup: $('#view-setup'),
+      dashboard: $('#view-dashboard')
+    };
+    els.apiKeyInput = $('#api-key-input');
+    els.togglePassword = $('#toggle-password');
+    els.saveKeyBtn = $('#save-key-btn');
+    els.setupError = $('#setup-error');
+    els.clearKeyBtn = $('#clear-key-btn');
+    els.pullIndicator = $('#pull-indicator');
+    els.totalBalance = $('#total-balance');
+    els.statusBadge = $('#status-badge');
+    els.toppedUpBalance = $('#topped-up-balance');
+    els.grantedBalance = $('#granted-balance');
+    els.lastUpdated = $('#last-updated');
+    els.refreshBtn = $('#refresh-btn');
+    els.settingsBtn = $('#settings-btn');
+    els.dashboardError = $('#dashboard-error');
+    els.toast = $('#toast');
+  }
 
   // --- 视图切换 ---
   function showView(viewName) {
+    log('showView:', viewName);
     state.currentView = viewName;
-    Object.entries(views).forEach(([name, el]) => {
-      el.classList.toggle('active', name === viewName);
+    Object.keys(els.views).forEach(function(key) {
+      var el = els.views[key];
+      if (!el) return;
+      if (key === viewName) {
+        el.classList.add('active');
+      } else {
+        el.classList.remove('active');
+      }
     });
   }
 
   // --- Toast ---
-  let toastTimer;
-  function showToast(message, type = '') {
-    const toast = $('#toast');
-    toast.textContent = message;
-    toast.className = 'toast ' + type + ' show';
+  var toastTimer = null;
+  function showToast(message, type) {
+    if (!els.toast) return;
+    type = type || '';
+    els.toast.textContent = message;
+    els.toast.className = 'toast ' + type + ' show';
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => {
-      toast.classList.remove('show');
+    toastTimer = setTimeout(function() {
+      els.toast.classList.remove('show');
     }, 2500);
   }
 
   // --- 格式化时间 ---
   function formatTime(date) {
     if (!date) return '--';
-    const now = new Date();
-    const diff = now - date;
-    const seconds = Math.floor(diff / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
+    var now = new Date();
+    var diff = now - date;
+    var seconds = Math.floor(diff / 1000);
+    var minutes = Math.floor(seconds / 60);
+    var hours = Math.floor(minutes / 60);
 
     if (seconds < 10) return '刚刚';
-    if (seconds < 60) return `${seconds} 秒前`;
-    if (minutes < 60) return `${minutes} 分钟前`;
-    if (hours < 24) return `${hours} 小时前`;
+    if (seconds < 60) return seconds + ' 秒前';
+    if (minutes < 60) return minutes + ' 分钟前';
+    if (hours < 24) return hours + ' 小时前';
 
-    const month = date.getMonth() + 1;
-    const day = date.getDate();
-    const hour = String(date.getHours()).padStart(2, '0');
-    const min = String(date.getMinutes()).padStart(2, '0');
-    return `${month}/${day} ${hour}:${min}`;
+    var month = date.getMonth() + 1;
+    var day = date.getDate();
+    var hour = ('0' + date.getHours()).slice(-2);
+    var min = ('0' + date.getMinutes()).slice(-2);
+    return month + '/' + day + ' ' + hour + ':' + min;
   }
 
   // --- API 调用 ---
-  async function fetchBalance(apiKey) {
-    const response = await fetch(DEEPSEEK_API, {
+  function fetchBalance(apiKey) {
+    log('fetchBalance: calling API...');
+    return fetch(DEEPSEEK_API, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
+        'Authorization': 'Bearer ' + apiKey
+      }
+    }).then(function(response) {
+      log('fetchBalance: response status', response.status);
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('API Key 无效，请检查后重新输入');
+        }
+        if (response.status === 429) {
+          throw new Error('请求过于频繁，请稍后再试');
+        }
+        throw new Error('请求失败 (HTTP ' + response.status + ')，请检查网络连接');
+      }
+      return response.json();
+    }).then(function(data) {
+      log('fetchBalance: success', data);
+      return data;
     });
+  }
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        throw new Error('API Key 无效，请检查后重新输入');
-      }
-      if (response.status === 429) {
-        throw new Error('请求过于频繁，请稍后再试');
-      }
-      throw new Error(`请求失败 (HTTP ${response.status})，请检查网络连接`);
+  // --- 按钮加载状态 ---
+  function setButtonLoading(btn, loading) {
+    if (loading) {
+      btn.disabled = true;
+      btn._text = btn.textContent;
+      btn.innerHTML = '<span class="loading-spinner" style="width:18px;height:18px;border-width:2px;"></span>';
+    } else {
+      btn.disabled = false;
+      btn.textContent = btn._text || '验证并保存';
     }
+  }
 
-    const data = await response.json();
-    return data;
+  // --- 显示/隐藏错误 ---
+  function showSetupError(message) {
+    log('setupError:', message);
+    if (els.setupError) {
+      els.setupError.textContent = message;
+      els.setupError.style.display = 'flex';
+    }
+  }
+
+  function hideSetupError() {
+    if (els.setupError) {
+      els.setupError.style.display = 'none';
+    }
+  }
+
+  function showDashboardError(message) {
+    log('dashboardError:', message);
+    if (els.dashboardError) {
+      els.dashboardError.style.display = 'flex';
+      var textEl = els.dashboardError.querySelector('.error-text');
+      if (textEl) textEl.textContent = message;
+    }
+  }
+
+  function hideDashboardError() {
+    if (els.dashboardError) {
+      els.dashboardError.style.display = 'none';
+    }
   }
 
   // --- 验证并保存 API Key ---
-  async function validateAndSaveKey() {
-    const apiKey = apiKeyInput.value.trim();
+  function validateAndSaveKey() {
+    var apiKey = els.apiKeyInput.value.trim();
 
     if (!apiKey) {
       showSetupError('请输入 API Key');
       return;
     }
 
-    if (!apiKey.startsWith('sk-')) {
+    if (apiKey.indexOf('sk-') !== 0) {
       showSetupError('API Key 格式不正确，应以 sk- 开头');
       return;
     }
 
-    setLoading(saveKeyBtn, true);
+    setButtonLoading(els.saveKeyBtn, true);
+    hideSetupError();
 
-    try {
-      // 调用 API 验证 Key 是否有效
-      await fetchBalance(apiKey);
-
-      // 验证成功，保存 Key
+    fetchBalance(apiKey).then(function() {
+      // 验证成功，保存
       localStorage.setItem(STORAGE_KEY, apiKey);
       state.apiKey = apiKey;
-      hideSetupError();
       showToast('API Key 验证成功', 'success');
-
-      // 加载余额数据并切换到 dashboard
-      await loadBalanceData();
+      // 加载余额并切换视图
+      return loadBalanceData();
+    }).then(function() {
       showView('dashboard');
-    } catch (error) {
+    }).catch(function(error) {
       showSetupError(error.message);
-    } finally {
-      setLoading(saveKeyBtn, false);
-    }
+    }).then(function() {
+      // finally
+      setButtonLoading(els.saveKeyBtn, false);
+    });
   }
 
-  function showSetupError(message) {
-    setupError.textContent = message;
-    setupError.style.display = 'flex';
-    // 抖动输入框
-    apiKeyInput.style.borderColor = 'var(--danger)';
-    setTimeout(() => {
-      apiKeyInput.style.borderColor = 'var(--border)';
-    }, 2000);
-  }
-
-  function hideSetupError() {
-    setupError.style.display = 'none';
-  }
-
-  // --- 加载余额数据 ---
-  async function loadBalanceData() {
-    if (state.isLoading) return;
+  // --- 加载余额 ---
+  function loadBalanceData() {
+    if (state.isLoading) return Promise.resolve();
     state.isLoading = true;
 
-    try {
-      const data = await fetchBalance(state.apiKey);
+    return fetchBalance(state.apiKey).then(function(data) {
       state.balanceData = data;
       state.lastUpdated = new Date();
       renderBalance(data);
       hideDashboardError();
-    } catch (error) {
-      // 如果是认证错误，跳回设置页
-      if (error.message.includes('401') || error.message.includes('无效')) {
+      log('loadBalanceData: success');
+    }).catch(function(error) {
+      log('loadBalanceData: error', error.message);
+      if (error.message.indexOf('401') >= 0 || error.message.indexOf('无效') >= 0) {
         showToast('API Key 已失效，请重新设置', 'error');
         switchToSetup();
         return;
       }
       showDashboardError(error.message);
-    } finally {
+    }).then(function() {
       state.isLoading = false;
       updateLastUpdated();
-      pullIndicator.classList.remove('active');
-    }
+      if (els.pullIndicator) {
+        els.pullIndicator.classList.remove('active');
+      }
+    });
   }
 
   // --- 渲染余额 ---
   function renderBalance(data) {
     if (!data || !data.balance_infos || data.balance_infos.length === 0) {
-      totalBalanceEl.textContent = '--';
-      toppedUpBalanceEl.textContent = '--';
-      grantedBalanceEl.textContent = '--';
+      els.totalBalance.textContent = '--';
+      els.toppedUpBalance.textContent = '--';
+      els.grantedBalance.textContent = '--';
       return;
     }
 
-    const info = data.balance_infos[0];
+    var info = data.balance_infos[0];
 
-    // 总余额
-    totalBalanceEl.textContent = formatNumber(info.total_balance);
+    els.totalBalance.textContent = formatNumber(info.total_balance);
+    els.toppedUpBalance.textContent = formatNumber(info.topped_up_balance);
+    els.grantedBalance.textContent = formatNumber(info.granted_balance);
 
-    // 充值余额
-    toppedUpBalanceEl.textContent = formatNumber(info.topped_up_balance);
-
-    // 赠送余额
-    grantedBalanceEl.textContent = formatNumber(info.granted_balance);
-
-    // 状态标识
     if (data.is_available) {
-      statusBadge.className = 'balance-hero-status available';
-      statusBadge.innerHTML = '<span class="status-dot green"></span> 可用';
+      els.statusBadge.className = 'balance-hero-status available';
+      els.statusBadge.innerHTML = '<span class="status-dot green"></span> 可用';
     } else {
-      statusBadge.className = 'balance-hero-status unavailable';
-      statusBadge.innerHTML = '<span class="status-dot red"></span> 余额不足';
+      els.statusBadge.className = 'balance-hero-status unavailable';
+      els.statusBadge.innerHTML = '<span class="status-dot red"></span> 余额不足';
     }
   }
 
   function formatNumber(value) {
     if (value === undefined || value === null) return '--';
-    const num = parseFloat(value);
+    var num = parseFloat(value);
     if (isNaN(num)) return '--';
     return num.toFixed(2);
   }
 
-  function showDashboardError(message) {
-    dashboardError.style.display = 'flex';
-    dashboardError.querySelector('.error-text').textContent = message;
-  }
-
-  function hideDashboardError() {
-    dashboardError.style.display = 'none';
-  }
-
   function updateLastUpdated() {
-    lastUpdatedEl.textContent = '更新于 ' + formatTime(state.lastUpdated);
+    if (els.lastUpdated) {
+      els.lastUpdated.textContent = '更新于 ' + formatTime(state.lastUpdated);
+    }
   }
 
-  // --- 切换到设置页 ---
+  // --- 切换设置页 ---
   function switchToSetup() {
     state.balanceData = null;
     state.lastUpdated = null;
     showView('setup');
-    apiKeyInput.value = state.apiKey;
+    if (els.apiKeyInput) {
+      els.apiKeyInput.value = state.apiKey;
+    }
     hideSetupError();
   }
 
-  // --- 按钮加载状态 ---
-  function setLoading(button, loading) {
-    if (loading) {
-      button.disabled = true;
-      button._originalText = button.textContent;
-      button.innerHTML = '<span class="loading-spinner" style="width:18px;height:18px;border-width:2px;"></span> 验证中...';
-    } else {
-      button.disabled = false;
-      button.textContent = button._originalText || '验证并保存';
+  // --- 刷新 ---
+  function doRefresh() {
+    if (state.isLoading) return;
+    if (els.pullIndicator) {
+      els.pullIndicator.classList.add('active');
+      var textEl = els.pullIndicator.querySelector('.pull-text');
+      if (textEl) textEl.textContent = '刷新中...';
     }
+    loadBalanceData().then(function() {
+      if (els.pullIndicator) {
+        els.pullIndicator.classList.remove('active');
+        var t = els.pullIndicator.querySelector('.pull-text');
+        if (t) t.textContent = '下拉刷新';
+      }
+    });
   }
 
-  // --- 下拉刷新 ---
-  let touchStartY = 0;
-  let touchCurrentY = 0;
-  let isPulling = false;
-  const PULL_THRESHOLD = 80;
+  // --- 下拉刷新（简化版，仅监听 dashboard 的 touch） ---
+  var touchStartY = 0;
+  var touchMoved = false;
+  var refreshing = false;
 
-  function isAtTop() {
-    return window.scrollY <= 0 && document.documentElement.scrollTop <= 0;
-  }
+  function setupPullToRefresh() {
+    var container = document.querySelector('.app-container');
+    if (!container) return;
 
-  function initPullToRefresh() {
-    document.addEventListener('touchstart', (e) => {
-      // 只在页面顶部且处于仪表盘视图时触发下拉刷新
-      if (!isAtTop() || state.currentView !== 'dashboard') return;
+    container.addEventListener('touchstart', function(e) {
+      if (state.currentView !== 'dashboard') return;
+      if (state.isLoading) return;
+      if (window.scrollY > 5) return;
       touchStartY = e.touches[0].clientY;
-      isPulling = false;
+      touchMoved = false;
     }, { passive: true });
 
-    document.addEventListener('touchmove', (e) => {
-      if (!isAtTop() || state.currentView !== 'dashboard') {
-        if (isPulling) {
-          isPulling = false;
-          pullIndicator.classList.remove('active');
+    container.addEventListener('touchmove', function(e) {
+      if (state.currentView !== 'dashboard') return;
+      if (state.isLoading) return;
+      if (window.scrollY > 5) return;
+
+      var delta = e.touches[0].clientY - touchStartY;
+      if (delta > 60) {
+        touchMoved = true;
+        if (els.pullIndicator) {
+          els.pullIndicator.classList.add('active');
+          var t = els.pullIndicator.querySelector('.pull-text');
+          if (t) t.textContent = '松开刷新';
         }
-        return;
-      }
-      touchCurrentY = e.touches[0].clientY;
-      const delta = touchCurrentY - touchStartY;
-
-      if (delta > 20 && !isPulling) {
-        isPulling = true;
-        pullIndicator.classList.add('active');
-      }
-
-      if (isPulling && delta > PULL_THRESHOLD) {
-        pullIndicator.querySelector('.pull-text').textContent = '松开刷新';
-      } else if (isPulling) {
-        pullIndicator.querySelector('.pull-text').textContent = '下拉刷新';
       }
     }, { passive: true });
 
-    document.addEventListener('touchend', () => {
-      if (!isPulling) return;
-      const delta = touchCurrentY - touchStartY;
-      isPulling = false;
-
-      if (delta > PULL_THRESHOLD) {
-        pullIndicator.querySelector('.pull-text').textContent = '刷新中...';
-        loadBalanceData().then(() => {
-          pullIndicator.querySelector('.pull-text').textContent = '下拉刷新';
-        });
-      } else {
-        pullIndicator.classList.remove('active');
+    container.addEventListener('touchend', function() {
+      if (!touchMoved || refreshing || state.currentView !== 'dashboard') return;
+      refreshing = true;
+      if (els.pullIndicator) {
+        var t = els.pullIndicator.querySelector('.pull-text');
+        if (t) t.textContent = '刷新中...';
       }
+      loadBalanceData().then(function() {
+        refreshing = false;
+        if (els.pullIndicator) {
+          els.pullIndicator.classList.remove('active');
+          var t = els.pullIndicator.querySelector('.pull-text');
+          if (t) t.textContent = '下拉刷新';
+        }
+      });
     });
   }
 
   // --- 事件绑定 ---
   function bindEvents() {
-    // 保存 API Key
-    saveKeyBtn.addEventListener('click', validateAndSaveKey);
+    log('bindEvents: start');
+
+    // 保存按钮
+    if (els.saveKeyBtn) {
+      els.saveKeyBtn.addEventListener('click', validateAndSaveKey);
+      els.saveKeyBtn.addEventListener('touchend', function(e) {
+        e.preventDefault();
+        validateAndSaveKey();
+      });
+    }
 
     // 回车提交
-    apiKeyInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        validateAndSaveKey();
-      }
-      // 输入时隐藏错误
-      hideSetupError();
-    });
+    if (els.apiKeyInput) {
+      els.apiKeyInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') validateAndSaveKey();
+        hideSetupError();
+      });
+      els.apiKeyInput.addEventListener('input', hideSetupError);
+    }
 
-    // 显示/隐藏 API Key
-    togglePasswordBtn.addEventListener('click', () => {
-      const isPassword = apiKeyInput.type === 'password';
-      apiKeyInput.type = isPassword ? 'text' : 'password';
-      togglePasswordBtn.textContent = isPassword ? '🙈' : '👁';
-    });
+    // 显示/隐藏密码
+    if (els.togglePassword) {
+      els.togglePassword.addEventListener('click', function() {
+        var isPassword = els.apiKeyInput.type === 'password';
+        els.apiKeyInput.type = isPassword ? 'text' : 'password';
+        els.togglePassword.textContent = isPassword ? '🙈' : '👁';
+      });
+      els.togglePassword.addEventListener('touchend', function(e) {
+        e.preventDefault();
+        var isPassword = els.apiKeyInput.type === 'password';
+        els.apiKeyInput.type = isPassword ? 'text' : 'password';
+        els.togglePassword.textContent = isPassword ? '🙈' : '👁';
+      });
+    }
 
     // 刷新按钮
-    refreshBtn.addEventListener('click', () => {
-      pullIndicator.classList.add('active');
-      pullIndicator.querySelector('.pull-text').textContent = '刷新中...';
-      loadBalanceData().then(() => {
-        pullIndicator.querySelector('.pull-text').textContent = '下拉刷新';
-        pullIndicator.classList.remove('active');
-      });
-    });
+    if (els.refreshBtn) {
+      els.refreshBtn.addEventListener('click', doRefresh);
+    }
 
     // 设置按钮
-    settingsBtn.addEventListener('click', () => {
-      switchToSetup();
-    });
-
-    // 清除 Key 按钮
-    $('#clear-key-btn').addEventListener('click', () => {
-      if (confirm('确定要清除已保存的 API Key 吗？')) {
-        localStorage.removeItem(STORAGE_KEY);
-        state.apiKey = '';
-        apiKeyInput.value = '';
+    if (els.settingsBtn) {
+      els.settingsBtn.addEventListener('click', function() {
         switchToSetup();
-        showToast('API Key 已清除', 'success');
-      }
-    });
+      });
+    }
 
-    // 初始化下拉刷新
-    initPullToRefresh();
+    // 清除 Key
+    if (els.clearKeyBtn) {
+      els.clearKeyBtn.addEventListener('click', function() {
+        if (confirm('确定要清除已保存的 API Key 吗？')) {
+          localStorage.removeItem(STORAGE_KEY);
+          state.apiKey = '';
+          if (els.apiKeyInput) els.apiKeyInput.value = '';
+          switchToSetup();
+          showToast('API Key 已清除', 'success');
+        }
+      });
+    }
+
+    // 下拉刷新
+    setupPullToRefresh();
+
+    log('bindEvents: done');
   }
 
   // --- 初始化 ---
-  async function init() {
+  function init() {
+    log('init: start');
+    cacheDom();
     bindEvents();
 
-    // 检查本地存储的 API Key
-    const savedKey = localStorage.getItem(STORAGE_KEY);
+    var savedKey = localStorage.getItem(STORAGE_KEY);
 
     if (savedKey) {
+      log('init: found saved key');
       state.apiKey = savedKey;
-      apiKeyInput.value = savedKey;
+      if (els.apiKeyInput) els.apiKeyInput.value = savedKey;
 
-      // 先显示加载状态
       showView('loading');
 
-      try {
-        await loadBalanceData();
+      loadBalanceData().then(function() {
         showView('dashboard');
-      } catch (error) {
-        // 加载失败，显示设置页
+      }).catch(function(error) {
+        log('init: load failed', error.message);
         showView('setup');
         showSetupError(error.message);
-      }
+      });
     } else {
-      // 没有保存的 Key，显示设置页
+      log('init: no saved key, showing setup');
       showView('setup');
-      apiKeyInput.focus();
+      setTimeout(function() {
+        if (els.apiKeyInput) els.apiKeyInput.focus();
+      }, 300);
     }
   }
 
   // --- 启动 ---
-  // 注册 Service Worker
+  // Service Worker
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js').catch(() => {
-        // SW 注册失败不影响主功能
+    window.addEventListener('load', function() {
+      navigator.serviceWorker.register('/sw.js').catch(function(err) {
+        log('SW registration failed:', err);
       });
     });
   }
 
-  // 启动应用
-  document.addEventListener('DOMContentLoaded', init);
+  // DOM 就绪后启动
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
 
-  // 定时更新最后更新时间（每分钟刷新显示）
-  setInterval(() => {
+  // 定时刷新"最后更新"显示
+  setInterval(function() {
     if (state.currentView === 'dashboard') {
       updateLastUpdated();
     }
   }, 30000);
 
+  log('app.js loaded');
 })();
