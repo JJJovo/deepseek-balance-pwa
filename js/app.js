@@ -452,7 +452,7 @@
   // Service Worker
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
-      navigator.serviceWorker.register('/sw.js').catch(function(err) {
+      navigator.serviceWorker.register('sw.js').catch(function(err) {
         log('SW registration failed:', err);
       });
     });

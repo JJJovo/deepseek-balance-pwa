@@ -1,5 +1,5 @@
 // DeepSeek Balance PWA - Service Worker
-const CACHE_NAME = 'ds-balance-v1';
+const CACHE_NAME = 'ds-balance-v2';
 
 // 需要预缓存的核心资源
 const PRECACHE_ASSETS = [
