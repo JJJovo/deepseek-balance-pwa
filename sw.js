@@ -3,11 +3,11 @@ const CACHE_NAME = 'ds-balance-v1';
 
 // 需要预缓存的核心资源
 const PRECACHE_ASSETS = [
-  '/',
-  '/index.html',
-  '/css/style.css',
-  '/js/app.js',
-  '/manifest.json'
+  './',
+  'index.html',
+  'css/style.css',
+  'js/app.js',
+  'manifest.json'
 ];
 
 // 安装事件：预缓存核心资源
@@ -63,7 +63,7 @@ self.addEventListener('fetch', (event) => {
       }).catch(() => {
         // 网络失败时返回缓存的离线页面
         if (event.request.mode === 'navigate') {
-          return caches.match('/index.html');
+          return caches.match('index.html');
         }
       });
     })
